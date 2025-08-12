@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>لا تدع مهدي يخرج من المنزل</title>
+<style>
+  :root {
+    --bg: #87ceeb;
+    --panel: #ffffffee;
+    --accent: #ff6b6b;
+  }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    font-family: Tahoma, Arial, sans-serif;
+    background: linear-gradient(#cfeffd, #87ceeb);
+    overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  #gameWrap {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 8px;
+    border-radius: 12px;
+    background: var(--panel);
+    box-shadow: 0 8px 30px rgba(0,0,0,.12);
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px;
+  }
+  h1 {
+    font-size: 18px;
+    margin: 0;
+  }
+  #hud {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .hudItem {
+    padding: 6px 10px;
+    background: #00000007;
+    border-radius: 10px;
+    font-weight: 600;
+  }
+  canvas {
+    flex: 1;
+    border-radius: 8px;
+    background: linear-gradient(#a3d9ff, #6ec0ff);
+    display: block;
+    touch-action: none;
+    cursor: crosshair;
+  }
+  footer {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px;
+  }
+  button {
+    padding: 8px 12px;
+    border-radius: 10px;
+    border: none;
+    background: var(--accent);
+    color: white;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .muted {
+    background: #ddd;
+    color: #333;
+  }
+  #message {
+    padding: 12px;
+    border-radius: 8px;
+    background: #00000006;
+    margin: 8px 0;
+    text-align: center;
+  }
+  @media (max-width: 420px) {
+    h1 {
+      font-size: 16px;
+    }
+    button {
+      padding: 6px 8px;
+      font-size: 14px;
+    }
+  }
+</style>
+</head>
+<body>
+<div id="gameWrap">
+  <header>
+    <h1>لا تدع مهدي يخرج من  المنزل</h1>
+    <div id="hud">
+      <div class="hudItem">النقاط: <span id="score">0</span></div>
+      <div class="hudItem">الحياة: <span id="lives">3</span></div>
+      <div class="hudItem">تم الإمساك بـ: <span id="caughtCount">0</span></div>
+    </div>
+  </header>
+
+  <canvas id="game"></canvas>
+
+  <div id="message">اضغط أو المس الشاشة للإطلاق النار. لا تدع جاسم يهرب!</div>
+
+  <footer>
+    <div>
+      <button id="startBtn">ابدأ اللعبة</button>
+      <button id="pauseBtn" class="muted">إيقاف مؤقت</button>
+    </div>
+    <div>
+      <button id="soundBtn">🔊 صوت</button>
+      <button id="helpBtn" class="muted">مساعدة</button>
+    </div>
+  </footer>
+</div>
+
+<script>
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  let W, H;
+  function resize() {
+    W = canvas.clientWidth;
+    H = canvas.clientHeight = Math.max(200, window.innerHeight - 200);
+    canvas.width = W;
+    canvas.height = H;
+    initClouds();
+  }
+  window.addEventListener('resize', resize);
+  setTimeout(resize, 50);
+
+  // *** تحميل صور الشخصية ***
+  const flyingImage = new Image();
+  flyingImage.src = 'jassim_flying.png';
+
+  const fallingImage = new Image();
+  fallingImage.src = 'jassim_falling.png';
+
+  // *** قسم الأصوات ***
+  // ملاحظة: استبدل "sounds/..." بالمسار الصحيح لملفات الصوت الخاصة بك.
+  const audio = {
+    backgroundMusic: new Audio('sounds/background_music.mp3'),
+    gameStart: new Audio('sounds/game_start.wav'),
+    jassimFly: new Audio('sounds/jassim_fly.wav'),
+    jassimHit: new Audio('sounds/jassim_hit.wav'),
+    jassimFall: new Audio('sounds/jassim_fall.wav'),
+    duckHit: new Audio('sounds/duck_hit.wav'),
+    gameOver: new Audio('sounds/game_over.wav'),
+    levelUp: new Audio('sounds/level_up.wav')
+  };
+  audio.backgroundMusic.loop = true;
+  audio.backgroundMusic.volume = 0.3;
+
+  function playSound(sound) {
+      if (soundOn && sound) {
+          sound.currentTime = 0;
+          sound.play().catch(e => console.error("لا يمكن تشغيل الصوت:", e));
+      }
+  }
+  // *** نهاية قسم الأصوات ***
+
+
+  let targets = [], bullets = [], clouds = [];
+  let score = 0, lives = 3, caughtCount = 0, round = 1;
+  let running = false, paused = false;
+  let spawnInterval = 1400, lastSpawn = 0;
+  let soundOn = true;
+
+  const scoreEl = document.getElementById('score');
+  const livesEl = document.getElementById('lives');
+  const caughtCountEl = document.getElementById('caughtCount');
+  const message = document.getElementById('message');
+
+  function rand(a, b) { return Math.random() * (b - a) + a; }
+
+  // *** قسم الغيوم ***
+  function initClouds() {
+      clouds = [];
+      for(let i = 0; i < 10; i++) {
+          spawnCloud();
+      }
+  }
+
+  function spawnCloud() {
+      clouds.push({
+          x: rand(-W, W * 1.5),
+          y: rand(20, H * 0.4),
+          size: rand(50, 150),
+          speed: rand(10, 25)
+      });
+  }
+  
+  function updateClouds(dt) {
+      for(let cloud of clouds) {
+          cloud.x += cloud.speed * (dt / 1000);
+          if(cloud.x > W + cloud.size * 2) {
+              cloud.x = -cloud.size * 2;
+          }
+      }
+  }
+
+  function drawClouds() {
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+      for (let cloud of clouds) {
+          ctx.beginPath();
+          ctx.ellipse(cloud.x, cloud.y, cloud.size, cloud.size * 0.6, 0, 0, 2 * Math.PI);
+          ctx.ellipse(cloud.x + cloud.size * 0.5, cloud.y + 10, cloud.size * 0.8, cloud.size * 0.7, 0, 0, 2 * Math.PI);
+          ctx.ellipse(cloud.x - cloud.size * 0.5, cloud.y + 10, cloud.size * 0.7, cloud.size * 0.5, 0, 0, 2 * Math.PI);
+          ctx.fill();
+      }
+  }
+  // *** نهاية قسم الغيوم ***
+
+  function spawnTarget() {
+    const isDuck = Math.random() < 0.25;
+    const size = isDuck ? rand(60, 90) : rand(100, 160);
+    const fromLeft = Math.random() < 0.5;
+    const y = rand(Math.max(60, size), Math.max(120, H * 0.5));
+    const speed = rand(60, 170) + round * 8;
+    const dir = fromLeft ? 1 : -1;
+    const x = fromLeft ? -size : W + size;
+    const target = { x, y, size, speed, dir, alive: true, falling: false, fallSpeed: 0, wiggle: Math.random() * 200, type: isDuck ? 'duck' : 'jassim' };
+    targets.push(target);
+
+    if (target.type === 'jassim') {
+        playSound(audio.jassimFly);
+    }
+  }
+
+  function shoot(x, y) {
+    if(!running || paused) return;
+    bullets.push({ x, y, r: 4, life: 0 });
+    for (let t of targets) {
+      if (!t.alive) continue;
+      const dx = x - t.x;
+      const dy = y - t.y;
+      if (Math.hypot(dx, dy) < t.size * 0.5) {
+        if (t.type === 'duck') {
+          lives--;
+          livesEl.textContent = lives;
+          playSound(audio.duckHit);
+          t.alive = false;
+          t.falling = true;
+          t.fallSpeed = 0;
+          if (lives <= 0) { gameOver(); return; }
+        } else {
+          t.alive = false;
+          t.falling = true;
+          t.fallSpeed = 0;
+          score += 10;
+          caughtCount++;
+          scoreEl.textContent = score;
+          caughtCountEl.textContent = caughtCount;
+          playSound(audio.jassimHit);
+          playSound(audio.jassimFall);
+          if (caughtCount % 10 === 0 && caughtCount > 0) {
+            message.textContent = 'لقد تم الإمساك بجاسم الحقيقي!';
+            setTimeout(() => { if(running) message.textContent = 'لا تدع جاسم يهرب من المنزل!'; }, 3000);
+          }
+        }
+      }
+    }
+  }
+
+  function pointerHandler(e) {
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    let cx, cy;
+    if (e.touches && e.touches.length) {
+      cx = e.touches[0].clientX - rect.left;
+      cy = e.touches[0].clientY - rect.top;
+    } else {
+      cx = e.clientX - rect.left;
+      cy = e.clientY - rect.top;
+    }
+    shoot(cx, cy);
+  }
+  canvas.addEventListener('click', pointerHandler);
+  canvas.addEventListener('touchstart', pointerHandler, { passive: false });
+
+  function update(dt) {
+    if (paused || !running) return;
+    updateClouds(dt);
+    lastSpawn += dt;
+    if (lastSpawn > spawnInterval) { lastSpawn = 0; spawnTarget(); }
+    for (let t of targets) {
+      if (t.alive) {
+        t.x += t.dir * t.speed * (dt / 1000);
+        t.y += Math.sin((Date.now() + t.wiggle) / 400) * 0.3;
+      } else if (t.falling) {
+        t.fallSpeed += 700 * (dt / 1000);
+        t.y += t.fallSpeed * (dt / 1000);
+      }
+    }
+    for (let b of bullets) b.life += dt;
+    bullets = bullets.filter(b => b.life < 500);
+
+    for (let i = targets.length - 1; i >= 0; i--) {
+      const t = targets[i];
+      if (t.alive && ((t.dir > 0 && t.x > W + t.size) || (t.dir < 0 && t.x < -t.size))) {
+        targets.splice(i, 1);
+        if (t.type === 'jassim') {
+            lives--; livesEl.textContent = lives;
+            playSound(audio.duckHit); // صوت عقوبة هروب جاسم
+            if (lives <= 0) { gameOver(); return; }
+        }
+      } else if (t.falling && t.y > H + t.size * 1.5) {
+        targets.splice(i, 1);
+      }
+    }
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+    drawClouds();
+    const groundH = Math.max(40, H * 0.12);
+    ctx.fillStyle = '#7ec850';
+    ctx.fillRect(0, H - groundH, W, groundH);
+
+    for (let t of targets) {
+        if (t.type === 'jassim') {
+            drawJassim(t);
+        } else {
+            drawDuck(t);
+        }
+    }
+
+    for (let b of bullets) {
+      ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2); ctx.fillStyle = 'red'; ctx.fill();
+    }
+  }
+  
+  function drawJassim(t) {
+    ctx.save();
+    ctx.translate(t.x, t.y);
+    if (t.dir < 0) {
+        ctx.scale(-1, 1);
+    }
+    
+    if (t.alive && !t.falling) {
+        ctx.strokeStyle = '#333';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(0, -t.size / 2.2);
+        ctx.lineTo(0, -t.size * 0.9);
+        ctx.stroke();
+        
+        ctx.fillStyle = '#ff6b6b';
+        ctx.beginPath();
+        ctx.ellipse(0, -t.size * 1.1, t.size * 0.25, t.size * 0.35, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#ff8e8e';
+        ctx.beginPath();
+        ctx.ellipse(-t.size * 0.08, -t.size * 1.2, t.size * 0.1, t.size * 0.15, -0.5, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    let currentImage = t.falling ? fallingImage : flyingImage;
+    if (currentImage.complete) {
+        ctx.drawImage(currentImage, -t.size / 2, -t.size / 2, t.size, t.size);
+    }
+    ctx.restore();
+  }
+
+  function drawDuck(t) {
+    ctx.save();
+    ctx.translate(t.x, t.y);
+    if (t.dir < 0) {
+        ctx.scale(-1, 1);
+    }
+    ctx.fillStyle = '#111';
+    ctx.beginPath();
+    ctx.ellipse(-t.size * 0.1, 0, t.size * 0.4, t.size * 0.25, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(t.size * 0.25, -t.size * 0.2, t.size * 0.18, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#ff9900';
+    ctx.beginPath();
+    ctx.moveTo(t.size * 0.4, -t.size * 0.22);
+    ctx.lineTo(t.size * 0.6, -t.size * 0.18);
+    ctx.lineTo(t.size * 0.4, -t.size * 0.14);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  let lastTs = 0;
+  function loop(ts) {
+    if (!lastTs) lastTs = ts;
+    const dt = ts - lastTs;
+    lastTs = ts;
+    update(dt);
+    draw();
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+
+  function startGame() {
+    targets = []; bullets = [];
+    score = 0; lives = 3; caughtCount = 0; round = 1;
+    spawnInterval = 1400; lastSpawn = 0;
+    running = true; paused = false;
+    scoreEl.textContent = score;
+    livesEl.textContent = lives;
+    caughtCountEl.textContent = caughtCount;
+    message.textContent = 'لا تدع جاسم يهرب من المنزل!';
+    
+    playSound(audio.gameStart);
+    if(soundOn) audio.backgroundMusic.play().catch(e => {});
+  }
+
+  function gameOver() {
+    running = false; paused = false;
+    audio.backgroundMusic.pause();
+    audio.backgroundMusic.currentTime = 0;
+    playSound(audio.gameOver);
+    message.textContent = 'انتهت اللعبة! مجموع نقاطك: ' + score + '. تم الإمساك بـ: ' + caughtCount + '. اضغط ابدأ لإعادة اللعب.';
+  }
+  
+  function handleRoundProgression() {
+    if (!running || paused) return;
+    if (score > round * 100) {
+      round++;
+      spawnInterval = Math.max(650, spawnInterval - 120);
+      message.textContent = 'المستوى ' + round;
+      playSound(audio.levelUp);
+      setTimeout(() => { if(running) message.textContent = 'لا تدع جاسم يهرب من المنزل!'; }, 1500);
+    }
+  }
+  setInterval(handleRoundProgression, 1000);
+
+  document.getElementById('startBtn').addEventListener('click', startGame);
+  document.getElementById('pauseBtn').addEventListener('click', (e) => {
+    if (!running) return;
+    paused = !paused;
+    e.target.textContent = paused ? 'استكمال' : 'إيقاف مؤقت';
+    message.textContent = paused ? 'اللعبة متوقفة مؤقتاً' : 'لا تدع جاسم يهرب من المنزل!';
+
+    if (paused) {
+        audio.backgroundMusic.pause();
+    } else if (soundOn) {
+        audio.backgroundMusic.play().catch(e => {});
+    }
+  });
+  document.getElementById('soundBtn').addEventListener('click', (e) => {
+    soundOn = !soundOn;
+    e.target.textContent = soundOn ? '🔊 صوت' : '🔈 صامت';
+    audio.backgroundMusic.muted = !soundOn;
+    // إذا كانت اللعبة تعمل والصوت يعمل الآن، شغل الموسيقى
+    if(soundOn && running && !paused) {
+        audio.backgroundMusic.play().catch(e => {});
+    }
+  });
+  document.getElementById('helpBtn').addEventListener('click', () => {
+    alert('اضغط أو المس الشاشة لإطلاق النار على جاسم. كل إصابة تعطيك 10 نقاط. لا تدع جاسم يهرب أو تخسر حياة. تجنب إصابة البط الأسود وإلا ستخسر حياة!');
+  });
+</script>
+</body>
+</html>
